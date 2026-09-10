@@ -171,6 +171,20 @@ class RobotService:
                 self._driver.shutdown()
             self._is_connected = False
             self._driver = None
+
+            # Notify WebSocket clients that robot is disconnected
+            disconnected_payload = {
+                "connected": False,
+                "status": 0,
+                "digital_outputs": [0] * 16,
+                "digital_output_bits": 0,
+            }
+            for cb in list(self._ws_callbacks):
+                try:
+                    cb({"type": "robot_state", "data": disconnected_payload})
+                except Exception:
+                    pass
+
             return True, ""
         except Exception as e:
             msg = f"Error disconnecting robot: {e}"
@@ -273,7 +287,7 @@ class RobotService:
         """
         eff_index = index if index is not None else self.spray_do_index
         if not 1 <= int(eff_index) <= 16:
-            msg = f"set_do: 非法的 DO 编号 {eff_index} (有效范围 1-16)"
+            msg = f"set_do: Invalid DO index {eff_index} (valid range 1-16)"
             logger.error(msg)
             return False, msg
         if not self._driver or not self._is_connected:
@@ -672,6 +686,7 @@ class RobotService:
                 last_error_status = current_error
 
                 msg_payload = {
+                    "connected": True,
                     "pose": pose,
                     "joint": joints,
                     "status": status,

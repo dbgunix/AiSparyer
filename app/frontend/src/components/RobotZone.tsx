@@ -7,6 +7,7 @@ interface RobotState {
   pose: number[];
   joint: number[];
   status?: number;
+  connected?: boolean;
   tcp_speed_actual?: number[];   // 6 分量原始反馈: Vx/Vy/Vz (m/s) + 角速度 (rad/s)
   tcp_speed_mm_s?: number;       // 后端预计算的 |Vlin| 合速度 (mm/s)
   qd_actual?: number[];
@@ -91,6 +92,48 @@ const RobotZone: React.FC<RobotZoneProps> = ({
   pathsVersion = 0,
   pathState = 'raw',
 }) => {
+  const [pendingDos, setPendingDos] = React.useState<Record<number, boolean>>({});
+
+  const handleToggleDo = async (doIndex: number, currentVal: number) => {
+    if (pendingDos[doIndex]) return;
+
+    const isConnected = robotState.connected ?? (
+      robotState.status !== undefined && (robotState.pose?.some(v => v !== 0) || robotState.joint?.some(v => v !== 0))
+    );
+    if (!isConnected) {
+      console.warn(`[RobotZone] Cannot toggle DO ${doIndex}: Robot is not connected.`);
+      return;
+    }
+
+    const targetStatus = currentVal === 1 ? 0 : 1;
+    setPendingDos(prev => ({ ...prev, [doIndex]: true }));
+    try {
+      const res = await fetch(`${API_BASE}/api/robot/set_do`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          index: doIndex,
+          status: targetStatus,
+          immediate: true,
+        }),
+      });
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({ detail: 'Unknown error' }));
+        console.error(`[RobotZone] Failed to set DO ${doIndex}:`, errorData.detail);
+        alert(`Failed to set DO ${doIndex}: ${errorData.detail || res.statusText}`);
+      }
+    } catch (err: any) {
+      console.error(`[RobotZone] Error toggling DO ${doIndex}:`, err);
+      alert(`Error toggling DO ${doIndex}: ${err.message || 'Network error'}`);
+    } finally {
+      setPendingDos(prev => {
+        const next = { ...prev };
+        delete next[doIndex];
+        return next;
+      });
+    }
+  };
+
   const handleClearError = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/robot/clear_error`, { method: 'POST' });
@@ -217,27 +260,49 @@ const RobotZone: React.FC<RobotZoneProps> = ({
               </span>
             </div>
           )}
-          {/* DO (Digital Output 1~16) Compact Row */}
+          {/* DO (Digital Output 1~16) Interactive Circular Row */}
           {(() => {
             const dos = getDigitalOutputs(robotState);
+            const isConnected = robotState.connected ?? (
+              robotState.status !== undefined && (robotState.pose?.some(v => v !== 0) || robotState.joint?.some(v => v !== 0))
+            );
             return (
-              <div className="flex items-center gap-1.5 mt-0.5">
-                <span className="text-slate-300/80 text-[8.5px] uppercase tracking-wider font-semibold shrink-0">DO:</span>
-                <div className="flex items-center gap-0.5">
+              <div className="flex items-center gap-1.5 mt-0.5 pointer-events-auto select-none">
+                <span className="text-slate-300/80 text-[8.5px] uppercase tracking-wider font-semibold shrink-0">
+                  DO:
+                </span>
+                <div className="flex items-center gap-1">
                   {dos.map((val, idx) => {
+                    const doIndex = idx + 1;
                     const isOn = val === 1;
+                    const isPending = !!pendingDos[doIndex];
                     return (
-                      <span
+                      <button
                         key={idx}
-                        title={`DO ${idx + 1}: ${isOn ? 'ON (1)' : 'OFF (0)'}`}
-                        className={`min-w-[12px] h-[12px] px-[1.5px] text-[7.5px] flex items-center justify-center rounded-[2px] font-mono leading-none font-bold transition-colors ${
+                        type="button"
+                        onClick={() => handleToggleDo(doIndex, val)}
+                        disabled={!isConnected || isPending}
+                        title={
+                          !isConnected
+                            ? `DO ${doIndex}: ${isOn ? 'ON (1)' : 'OFF (0)'} (Robot offline)`
+                            : isPending
+                            ? `DO ${doIndex}: Switching...`
+                            : `DO ${doIndex}: ${isOn ? 'ON (1) - Click to turn OFF' : 'OFF (0) - Click to turn ON'}`
+                        }
+                        className={`w-[15px] h-[15px] min-w-[15px] text-[8px] flex items-center justify-center rounded-full font-mono leading-none font-bold transition-all duration-150 ${
                           isOn
-                            ? 'bg-emerald-500/30 text-emerald-300 border border-emerald-400/60 shadow-[0_0_4px_rgba(16,185,129,0.5)]'
-                            : 'bg-slate-900/60 text-slate-500/70 border border-slate-700/30'
-                        } ${idx === 7 ? 'mr-1' : ''}`}
+                            ? 'bg-emerald-500/30 text-emerald-300 border border-emerald-400/80 shadow-[0_0_6px_rgba(16,185,129,0.5)]'
+                            : 'bg-slate-900/70 text-slate-400/70 border border-slate-700/50'
+                        } ${
+                          isConnected
+                            ? 'cursor-pointer hover:scale-115 hover:border-sky-400 hover:text-white active:scale-90'
+                            : 'cursor-not-allowed opacity-50'
+                        } ${
+                          isPending ? 'animate-pulse ring-1 ring-sky-400 border-sky-400' : ''
+                        } ${idx === 7 ? 'mr-1.5' : ''}`}
                       >
-                        {idx + 1}
-                      </span>
+                        {doIndex}
+                      </button>
                     );
                   })}
                 </div>
